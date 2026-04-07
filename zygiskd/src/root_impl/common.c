@@ -93,7 +93,7 @@ bool uid_granted_root(uid_t uid) {
 bool uid_should_umount(uid_t uid, const char *const process) {
   switch (impl.impl) {
     case KernelSU: {
-      return ksu_uid_should_umount(uid);
+      //return ksu_uid_should_umount(uid);
     }
     case APatch: {
       return apatch_uid_should_umount(uid, process);
