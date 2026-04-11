@@ -1,33 +1,27 @@
-#include <sys/mount.h>
-#include <dlfcn.h>
-#include <link.h>
-#include <regex.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
-#include <stdio.h>
 
-#include <lsplt.h>
-#include <csoloader.h>
+#include <dlfcn.h>
+#include <regex.h>
 
-#include <fcntl.h>
 #include <dirent.h>
-#include <sys/types.h>
-#include <sys/prctl.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/mman.h>
-#include <signal.h>
+#include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <unistd.h>
-#include <pthread.h>
+
+#include <csoloader.h>
+#include <lsplt.h>
 
 #include "daemon.h"
-#include "module.h"
 #include "misc.h"
+#include "module.h"
 
 #include "art_method.h"
 #include "cpp_strings.h"
@@ -328,6 +322,8 @@ DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
   if (should_unmap_zygisk) {
     unhook_functions();
 
+    csoloader_deinit();
+
     if (!should_unmap_zygisk) {
       LOGW("Failed to unmap libzygisk.so, skipping munmap");
 
@@ -478,7 +474,7 @@ static void initialize_jni_hook(void) {
 
         break;
       }
- 
+
       get_created_java_vms = (jint (*)(JavaVM **, jsize, jsize *))dlsym(handle, "JNI_GetCreatedJavaVMs");
       dlclose(handle);
 
@@ -585,7 +581,7 @@ static bool api_plt_hook_commit(void) {
       bool ignored = false;
       for (size_t ig = 0; ig < g_ctx->ignore_info_count; ig++) {
         struct ignore_info *ign = &g_ctx->ignore_info[ig];
-        if (regexec(&ign->regex, map->path, 0, NULL, 0) != 0) continue;  
+        if (regexec(&ign->regex, map->path, 0, NULL, 0) != 0) continue;
         if (ign->symbol && strcmp(ign->symbol, reg->symbol) != 0) continue;
 
         ignored = true;
@@ -803,11 +799,11 @@ static void rz_sanitize_fds(struct zygisk_context *ctx) {
   if (FLAG_GET(ctx, SKIP_FD_SANITIZATION)) return;
 
   if (FLAG_GET(ctx, APP_FORK_AND_SPECIALIZE)) {
-    jintArray fdsToIgnore = *ctx->args.app->fds_to_ignore;
+    jintArray fdsToIgnore = ctx->args.app->fds_to_ignore ? *ctx->args.app->fds_to_ignore : NULL;
     mark_fds_allowed(ctx, ctx->env, fdsToIgnore);
 
-    if (ctx->exempted_fds_count > 0) {
-      jint len = fdsToIgnore ? (*ctx->env)->GetArrayLength(ctx->env, fdsToIgnore) : 0;
+    if (fdsToIgnore && ctx->exempted_fds_count > 0) {
+      jint len = (*ctx->env)->GetArrayLength(ctx->env, fdsToIgnore);
       jintArray newArray = (*ctx->env)->NewIntArray(ctx->env, (jsize)(len + ctx->exempted_fds_count));
       if (newArray) {
         if (fdsToIgnore && len > 0) {

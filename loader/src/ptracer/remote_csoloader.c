@@ -1,26 +1,24 @@
 /* INFO: Remote CSOLoader, part of CSOLoader. Follows the same licensing
-           as the original one (CSOLoader project). */
+           as the original one (CSOLoader project).
+*/
 
 #include "remote_csoloader.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <inttypes.h>
-#include <limits.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include <string.h>
+
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include <elf.h>
 #include <link.h>
-
 #include <sys/syscall.h>
 
 #undef SYS_mmap
 #define SYS_mmap LP_SELECT(__NR_mmap2, __NR_mmap)
 
-#include "logging.h"
 #include "socket_utils.h"
 
 #ifndef ALIGN_DOWN
@@ -482,6 +480,24 @@ static bool resolve_symbol_addr(int fd, const struct elf_dyn_info *info,
     }
   }
 
+  if (strcmp(name, "dlopen") == 0 || strcmp(name, "dlsym") == 0 || strcmp(name, "dlerror") == 0 || strcmp(name, "dl_iterate_phdr") == 0 || strcmp(name, "dlclose") == 0) {
+    const char *linker_dl_symbol = "__dl_dlopen";
+    if (strcmp(name, "dlsym") == 0) linker_dl_symbol = "__dl_dlsym";
+    else if (strcmp(name, "dlerror") == 0) linker_dl_symbol = "__dl_dlerror";
+    else if (strcmp(name, "dl_iterate_phdr") == 0) linker_dl_symbol = "__dl_dl_iterate_phdr";
+    else if (strcmp(name, "dlclose") == 0) linker_dl_symbol = "__dl_dlclose";
+
+    LOGD("Trying to resolve %s from main executable as: %s", name, linker_dl_symbol);
+
+    /* INFO: Special-case dlsym since some old devices don't have libdl.so loaded to resolve it from. */
+    void *addr = find_func_addr(local_map, remote_map, "/system/bin/" LP_SELECT("linker", "linker64"), linker_dl_symbol);
+    if (addr) {
+      *out_addr = (uintptr_t)addr;
+
+      return true;
+    }
+  }
+
   LOGE("Failed to resolve external symbol %s", name);
 
   return false;
@@ -777,8 +793,11 @@ bool remote_csoloader_load_and_resolve_entry(int pid, struct user_regs_struct *r
 
   free(remote_path_zerod);
 
-  /* INFO: Reserve address space with PROT_NONE */
-  args[0] = 0;
+  /* INFO: Request an LP64 base 4GiB+ so the mapping starts high and stays
+             farther from the areas where the target process is more likely to
+             create VMAs later. */
+  uintptr_t min_addr = sizeof(void *) == 8 ? 0x100000000ULL : (uintptr_t)0;
+  args[0] = (long)min_addr;
   args[1] = (long)map_size;
   args[2] = PROT_NONE;
   args[3] = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -793,7 +812,6 @@ bool remote_csoloader_load_and_resolve_entry(int pid, struct user_regs_struct *r
     call_regs = regs_saved;
 
     args[0] = remote_fd;
-  
     remote_syscall(pid, &call_regs, syscall_gadget, SYS_close, args, 1);
 
     free(phdr);
@@ -801,6 +819,29 @@ bool remote_csoloader_load_and_resolve_entry(int pid, struct user_regs_struct *r
 
     return false;
   }
+
+#ifdef __LP64__
+  if (remote_base < min_addr) {
+    LOGE("remote mmap reserve returned low base %p (< %p)", (void *)remote_base, (void *)min_addr);
+
+    call_regs = regs_saved;
+
+    args[0] = (long)remote_base;
+    args[1] = (long)map_size;
+
+    remote_syscall(pid, &call_regs, syscall_gadget, SYS_munmap, args, 2);
+
+    call_regs = regs_saved;
+    args[0] = remote_fd;
+
+    remote_syscall(pid, &call_regs, syscall_gadget, SYS_close, args, 1);
+
+    free(phdr);
+    close(fd);
+
+    return false;
+  }
+ #endif
 
   uintptr_t load_bias = remote_base - (uintptr_t)min_vaddr;
 
@@ -849,7 +890,7 @@ bool remote_csoloader_load_and_resolve_entry(int pid, struct user_regs_struct *r
           call_regs = regs_saved;
 
           args[0] = remote_fd;
-  
+
           remote_syscall(pid, &call_regs, syscall_gadget, SYS_close, args, 1);
           free(phdr);
           close(fd);
@@ -1030,12 +1071,30 @@ bool remote_csoloader_load_and_resolve_entry(int pid, struct user_regs_struct *r
 
   /* INFO: Finalize segment protections after relocations */
   for (size_t i = 0; i < segs_count; i++) {
+    call_regs = regs_saved;
+
     args[0] = (long)segs[i].addr;
     args[1] = (long)segs[i].len;
     args[2] = segs[i].final_prot;
 
-    call_regs = regs_saved;
-    remote_syscall(pid, &call_regs, syscall_gadget, SYS_mprotect, args, 3);
+    long mp_ret = remote_syscall(pid, &call_regs, syscall_gadget, SYS_mprotect, args, 3);
+    if (mp_ret < 0) {
+      LOGE("Failed to set final protections for segment at %p: %ld", (void *)segs[i].addr, mp_ret);
+
+      call_regs = regs_saved;
+
+      args[0] = (long)remote_base;
+      args[1] = (long)map_size;
+
+      remote_syscall(pid, &call_regs, syscall_gadget, SYS_munmap, args, 2);
+
+      free((void *)needed_paths);
+      elf_dyn_info_destroy(&dinfo);
+      free(phdr);
+      close(fd);
+
+      return false;
+    }
   }
 
   ElfW(Addr) entry_value = 0;

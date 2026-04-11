@@ -1,12 +1,9 @@
-#include "misc.h"
 #include "daemon.h"
 #include "logging.h"
+#include "misc.h"
 
 #include "hook.h"
 #include "ptrace_clear.h"
-
-#include <pthread.h>
-#include <unistd.h>
 
 __attribute__((visibility("default")))
 void entry(void *addr, size_t size, int tango_flag) {

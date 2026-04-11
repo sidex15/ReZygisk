@@ -1,8 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
 #include <sys/stat.h>
 #include <unistd.h>
-#include <errno.h>
 
 #include "../constants.h"
 #include "../utils.h"
@@ -35,11 +36,11 @@ void apatch_get_existence(struct root_impl_state *state) {
   }
 
   char apatch_version[32];
-  char *const argv[] = { "apd", "-V", NULL };
+  const char *const argv[] = { "apd", "-V", NULL };
 
   if (!exec_command(apatch_version, sizeof(apatch_version), "/data/adb/apd", argv)) {
     LOGE("Failed to execute apd binary: %s", strerror(errno));
-  
+
     state->state = Inexistent;
 
     return;

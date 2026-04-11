@@ -1,28 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
 #include <fcntl.h>
 #include <poll.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/wait.h>
-#include <sys/un.h>
-#include <sys/sysmacros.h>
 #include <sys/mount.h>
+#include <sys/socket.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 
-#include <unistd.h>
 #include <linux/limits.h>
 #include <sched.h>
-#include <pthread.h>
+#include <unistd.h>
 
-#include <android/log.h>
-
-#include "utils.h"
 #include "root_impl/common.h"
 #include "root_impl/kernelsu.h"
 #include "root_impl/magisk.h"
+
+#include "utils.h"
 
 bool switch_mount_namespace(pid_t pid) {
   char path[PATH_MAX];
@@ -328,7 +327,7 @@ ssize_t read_string(int fd, char *restrict buf, size_t buf_size) {
 }
 
 /* INFO: Cannot use restrict here as execv does not have restrict */
-bool exec_command(char *restrict buf, size_t len, const char *restrict file, char *const argv[]) {
+bool exec_command(char *restrict buf, size_t len, const char *restrict file, const char *const argv[]) {
   int link[2];
   pid_t pid;
 
@@ -352,7 +351,10 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
     close(link[0]);
     close(link[1]);
 
-    execv(file, argv);
+    /* NOTE: Sonarlint complains about a const qualifier drop here (c:S859),
+               but this cast is deliberate and unavoidable.
+    */
+    execv(file, (char *const *)argv);
 
     LOGE("execv failed: %s", strerror(errno));
     _exit(1);
@@ -641,7 +643,7 @@ bool umount_root(struct root_impl impl) {
     return false;
   }
 
-  char *source_name = "magisk";
+  const char *source_name = "magisk";
   if (impl.impl == KernelSU) source_name = "KSU";
   else if (impl.impl == APatch) source_name = "APatch";
 

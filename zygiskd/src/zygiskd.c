@@ -1,25 +1,18 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include <dirent.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <sys/sendfile.h>
-#include <fcntl.h>
 #include <errno.h>
-#include <stdio.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 
-#include <unistd.h>
 #include <linux/limits.h>
-#include <sys/syscall.h>
-#include <linux/memfd.h>
+#include <unistd.h>
 
-#include <pthread.h>
-
-#include "root_impl/common.h"
 #include "constants.h"
+#include "root_impl/common.h"
 #include "utils.h"
 
 struct Module {
@@ -148,7 +141,7 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
 
     exit(1);
   }
-  
+
   if (pid > 0) {
     close(companion_fd);
 
@@ -227,7 +220,9 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
   char companion_fd_str[32];
   snprintf(companion_fd_str, sizeof(companion_fd_str), "%d", companion_fd);
 
-  char *eargv[] = { process_name, "companion", companion_fd_str, NULL };
+  char companion[] = "companion";
+
+  char *eargv[] = { process_name, companion, companion_fd_str, NULL };
   if (non_blocking_execv(ZYGISKD_PATH, eargv) == -1) {
     LOGE("Failed executing companion: %s", strerror(errno));
 

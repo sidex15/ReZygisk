@@ -1,4 +1,5 @@
 #include <stdio.h>
+
 #include <sys/utsname.h>
 
 #include "logging.h"

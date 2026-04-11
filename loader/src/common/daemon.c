@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <sys/socket.h>
+#include <string.h>
+#include <errno.h>
 
 #include <linux/un.h>
+#include <sys/socket.h>
 
 #include "logging.h"
+#include "misc.h"
 #include "socket_utils.h"
 
 #include "daemon.h"
@@ -20,7 +23,7 @@ int rezygiskd_connect(uint8_t retry) {
     .sun_path = { 0 }
   };
 
-  /* 
+  /*
     INFO: Application must assume that sun_path can hold _POSIX_PATH_MAX characters.
 
     Sources:

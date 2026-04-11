@@ -30,7 +30,7 @@ val commitHash: String by rootProject.extra
            doesn't exist, we must utilize "-Wno-unknown-warning-option". */
 val CStandardFlags = arrayOf(
   "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
-  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
+  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", "-Wwrite-strings",
   "-Wno-fixed-enum-extension", "-Wno-unknown-warning-option", "-Wno-c23-extensions",
   "-Wconversion", "-Iroot_impl", "-llog", "-DMIN_APATCH_VERSION=$minAPatchVersion",
   "-DMIN_KSU_VERSION=$minKsuVersion",
@@ -64,11 +64,12 @@ task("buildAndStrip") {
   val isDebug = gradle.startParameter.taskNames.any { it.lowercase().contains("debug") }
   doLast {
     val ndkPath = getLatestNDKPath()
+    val sdkVersion = rootProject.extra["androidMinSdkVersion"] as Int
 
-    val aarch64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "aarch64-linux-android34-clang").toString()
-    val armv7aCompiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "armv7a-linux-androideabi34-clang").toString()
-    val x86Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "i686-linux-android34-clang").toString()
-    val x86_64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "x86_64-linux-android34-clang").toString()
+    val aarch64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "aarch64-linux-android${sdkVersion}-clang").toString()
+    val armv7aCompiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "armv7a-linux-androideabi${sdkVersion}-clang").toString()
+    val x86Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "i686-linux-android${sdkVersion}-clang").toString()
+    val x86_64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "x86_64-linux-android${sdkVersion}-clang").toString()
 
     if (!Paths.get(aarch64Compiler).toFile().exists()) {
       throw Exception("aarch64 compiler not found at $aarch64Compiler")
@@ -117,4 +118,3 @@ task("buildAndStrip") {
     }
   }
 }
-

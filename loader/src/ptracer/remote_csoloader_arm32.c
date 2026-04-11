@@ -5,12 +5,11 @@
 
 #ifdef __aarch64__
 
-#include <errno.h>
-#include <fcntl.h>
-#include <inttypes.h>
-#include <limits.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include <string.h>
+
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -18,9 +17,7 @@
 #include <elf.h>
 
 #include "elf_util_32.h"
-#include "logging.h"
 #include "socket_utils.h"
-#include "utils.h"
 
 #ifndef ALIGN_DOWN
   #define ALIGN_DOWN(x, a) ((x) & ~((a)-1))
@@ -948,12 +945,29 @@ bool arm32_csoloader_load(int pid, struct user_regs_struct *regs,
   }
 
   for (size_t i = 0; i < segs_count; i++) {
+    call_regs = regs_saved;
+
     args[0] = (long)segs[i].addr;
     args[1] = (long)segs[i].len;
     args[2] = segs[i].final_prot;
 
-    call_regs = regs_saved;
-    remote_syscall(pid, &call_regs, syscall_gadget, __NR_mprotect, args, 3);
+    long mp_ret = remote_syscall(pid, &call_regs, syscall_gadget, __NR_mprotect, args, 3);
+    if (mp_ret < 0) {
+      LOGE("Failed to set final protections for segment at 0x%u: %ld", segs[i].addr, mp_ret);
+
+      call_regs = regs_saved;
+
+      args[0] = (long)remote_base;
+      args[1] = (long)map_size;
+      remote_syscall(pid, &call_regs, syscall_gadget, __NR_munmap, args, 2);
+
+      free((void *)needed_paths);
+      elf_dyn_info_destroy(&dinfo);
+      free(phdr);
+      close(fd);
+
+      return false;
+    }
   }
 
   struct elf_32 *entry_img = elf_32_create(lib_path);

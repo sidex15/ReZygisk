@@ -1,24 +1,20 @@
 #include <stdlib.h>
-
+#include <string.h>
 #include <time.h>
+#include <errno.h>
 
-#include <sys/system_properties.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/epoll.h>
+#include <sys/mount.h>
 #include <sys/signalfd.h>
-#include <err.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/epoll.h>
 #include <sys/wait.h>
-#include <sys/mount.h>
-#include <fcntl.h>
-#include <string.h>
 
-#include <unistd.h>
-
-#include "utils.h"
 #include "daemon.h"
-#include "misc.h"
 #include "socket_utils.h"
+#include "utils.h"
 
 #include "monitor.h"
 
@@ -28,7 +24,7 @@
 
 static bool update_status(const char *message);
 
-char monitor_stop_reason[32];
+const char *monitor_stop_reason = NULL;
 
 struct environment_information {
   char *root_impl;
@@ -116,7 +112,7 @@ bool monitor_events_unregister_event(int fd) {
 
 void monitor_events_stop() {
   monitor_events_running = false;
-};
+}
 
 void monitor_events_loop() {
   struct epoll_event events[2];
@@ -130,7 +126,7 @@ void monitor_events_loop() {
       break;
     }
 
-    for (int i = 0; i < nfds; i++) { 
+    for (int i = 0; i < nfds; i++) {
       ((monitor_event_callback_t)events[i].data.ptr)();
 
       if (!monitor_events_running) break;
@@ -201,7 +197,7 @@ void rezygiskd_listener_callback() {
           LOGI("Stop tracing requested");
 
           tracing_state = STOPPING;
-          strcpy(monitor_stop_reason, "user requested");
+          monitor_stop_reason = "user requested";
 
           ptrace(PTRACE_INTERRUPT, 1, 0, 0);
           update_status(NULL);
@@ -213,14 +209,14 @@ void rezygiskd_listener_callback() {
         LOGI("Prepare for exit ...");
 
         tracing_state = EXITING;
-        strcpy(monitor_stop_reason, "user requested");
+        monitor_stop_reason = "user requested";
 
         update_status(NULL);
         monitor_events_stop();
 
         break;
       }
-      case ZYGOTE64_INJECTED: 
+      case ZYGOTE64_INJECTED:
       case ZYGOTE32_INJECTED: {
         LOGI("Received Zygote%s injected command", cmd == ZYGOTE64_INJECTED ? "64" : "32");
 
@@ -304,20 +300,20 @@ void rezygiskd_listener_callback() {
           if (read_uint32_t(monitor_sock_fd, &module_name_len) != sizeof(module_name_len)) {
             LOGE("read ReZygiskd%s module name len", cmd == DAEMON64_SET_INFO ? "64" : "32");
 
-            goto rezygiskd64_set_info_modules_cleanup;
+            goto set_info_modules_cleanup;
           }
 
           environment_information->modules[i] = malloc(module_name_len + 1);
           if (environment_information->modules[i] == NULL) {
             PLOGE("malloc ReZygiskd%s module name", cmd == DAEMON64_SET_INFO ? "64" : "32");
 
-            goto rezygiskd64_set_info_modules_cleanup;
+            goto set_info_modules_cleanup;
           }
 
           if (read_loop(monitor_sock_fd, (void *)environment_information->modules[i], module_name_len) != (ssize_t)module_name_len) {
             LOGE("read ReZygiskd%s module name", cmd == DAEMON64_SET_INFO ? "64" : "32");
 
-            goto rezygiskd64_set_info_modules_cleanup;
+            goto set_info_modules_cleanup;
           }
 
           environment_information->modules[i][module_name_len] = '\0';
@@ -325,7 +321,7 @@ void rezygiskd_listener_callback() {
 
           continue;
 
-          rezygiskd64_set_info_modules_cleanup:
+          set_info_modules_cleanup:
             free((void *)environment_information->root_impl);
             environment_information->root_impl = NULL;
 
@@ -487,7 +483,7 @@ static bool ensure_daemon_created(bool is_64bit) {
       LOGW("Zygote" # abi " restart too much times, stop injecting"); \
                                                                       \
       tracing_state = STOPPING;                                       \
-      strcpy(monitor_stop_reason, "Zygote crashed");                  \
+      monitor_stop_reason = "Zygote crashed";                         \
       ptrace(PTRACE_INTERRUPT, 1, 0, 0);                              \
                                                                       \
       break;                                                          \
@@ -497,7 +493,7 @@ static bool ensure_daemon_created(bool is_64bit) {
       LOGW("ReZygiskd " #abi "-bit not running, stop injecting");     \
                                                                       \
       tracing_state = STOPPING;                                       \
-      strcpy(monitor_stop_reason, "ReZygiskd not running");           \
+      monitor_stop_reason = "ReZygiskd not running";                  \
       ptrace(PTRACE_INTERRUPT, 1, 0, 0);                              \
                                                                       \
       break;                                                          \
@@ -513,7 +509,7 @@ static bool ensure_daemon_created(bool is_64bit) {
       LOGW("Tango restart too many times, stop injecting");        \
                                                                    \
       tracing_state = STOPPING;                                    \
-      strcpy(monitor_stop_reason, "Zygote crashed");               \
+      monitor_stop_reason = "Zygote crashed";                      \
       ptrace(PTRACE_INTERRUPT, 1, 0, 0);                           \
                                                                    \
       break;                                                       \
@@ -523,7 +519,7 @@ static bool ensure_daemon_created(bool is_64bit) {
       LOGW("ReZygiskd 32-bit not running, stop injecting");        \
                                                                    \
       tracing_state = STOPPING;                                    \
-      strcpy(monitor_stop_reason, "ReZygiskd not running");        \
+      monitor_stop_reason = "ReZygiskd not running";               \
       ptrace(PTRACE_INTERRUPT, 1, 0, 0);                           \
                                                                    \
       break;                                                       \
@@ -884,7 +880,7 @@ static bool update_status(const char *message) {
 
     fprintf(json, "  \"monitor\": {\n");
     fprintf(json, "    \"state\": \"%d\"", tracing_state);
-    if (monitor_stop_reason[0] != '\0') fprintf(json, ",\n    \"reason\": \"%s\",\n", monitor_stop_reason);
+    if (monitor_stop_reason) fprintf(json, ",\n    \"reason\": \"%s\",\n", monitor_stop_reason);
     else fprintf(json, "\n");
 
     if (status64.supported || status32.supported)

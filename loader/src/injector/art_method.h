@@ -2,8 +2,8 @@
 #define ART_METHOD_H
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <jni.h>
 
@@ -27,25 +27,25 @@ static inline void *amethod_from_reflected_method(JNIEnv *env, jobject method);
 static inline bool amethod_init(JNIEnv *env) {
   jclass clazz = (*env)->FindClass(env, "java/lang/reflect/Executable");
   if (!clazz) {
-    LOGE("Failed to found Executable");
+    LOGW("Executable not found, falling back to FromReflectedMethod");
 
-    return false;
-  }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 
-  art_method_field = (*env)->GetFieldID(env, clazz, "artMethod", "J");
-  if (!art_method_field) {
-    LOGE("Failed to find artMethod field");
+    art_method_field = NULL;
+  } else {
+    art_method_field = (*env)->GetFieldID(env, clazz, "artMethod", "J");
+    if (!art_method_field) {
+      LOGW("Failed to find artMethod field, falling back to FromReflectedMethod");
 
-    (*env)->DeleteLocalRef(env, clazz);
-
-    return false;
+      if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    }
   }
 
   jclass throwable = (*env)->FindClass(env, "java/lang/Throwable");
   if (!throwable) {
     LOGE("Failed to found Throwable");
 
-    (*env)->DeleteLocalRef(env, clazz);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
 
     return false;
   }
@@ -54,7 +54,7 @@ static inline bool amethod_init(JNIEnv *env) {
   if (!clz) {
     LOGE("Failed to found Class");
 
-    (*env)->DeleteLocalRef(env, clazz);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
     (*env)->DeleteLocalRef(env, throwable);
 
     return false;
@@ -68,7 +68,7 @@ static inline bool amethod_init(JNIEnv *env) {
   if (!constructors || (*env)->GetArrayLength(env, constructors) < 2) {
     LOGE("Throwable has less than 2 constructors");
 
-    (*env)->DeleteLocalRef(env, clazz);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
 
     return false;
   }
@@ -82,7 +82,7 @@ static inline bool amethod_init(JNIEnv *env) {
   (*env)->DeleteLocalRef(env, first_ctor);
   (*env)->DeleteLocalRef(env, second_ctor);
   (*env)->DeleteLocalRef(env, constructors);
-  (*env)->DeleteLocalRef(env, clazz);
+  if (clazz) (*env)->DeleteLocalRef(env, clazz);
 
   art_method_size = second - first;
   LOGD("ArtMethod size: %zu", art_method_size);

@@ -1,12 +1,11 @@
 #include <sys/types.h>
-#include <sys/stat.h>
-
-#include "../utils.h"
-#include "kernelsu.h"
-#include "apatch.h"
-#include "magisk.h"
 
 #include "common.h"
+
+#include "../utils.h"
+#include "apatch.h"
+#include "kernelsu.h"
+#include "magisk.h"
 
 static struct root_impl impl;
 

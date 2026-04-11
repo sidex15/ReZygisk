@@ -1,27 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <inttypes.h>
-#include <ctype.h>
 #include <stddef.h>
 #include <string.h>
+#include <errno.h>
 
-#include <sys/sysmacros.h>
-#include <sys/ptrace.h>
-#include <sys/mman.h>
-#include <sys/time.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <sys/auxv.h>
-#include <sys/uio.h>
-#include <signal.h>
-#include <dlfcn.h>
-#include <sched.h>
-#include <fcntl.h>
-#include <link.h>
-
-#include <unistd.h>
+#include <ctype.h>
+#include <inttypes.h>
 #include <linux/limits.h>
+
+#include <link.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/ptrace.h>
+#include <sys/sysmacros.h>
+#include <sys/uio.h>
+#include <sys/wait.h>
 
 #include "elf_util.h"
 #include "elf_util_32.h"
@@ -468,10 +462,8 @@ uintptr_t find_syscall_gadget(int pid, struct maps *remote_map) {
     const size_t insn_size = 4;
     const uintptr_t insn_bias = 0;
   #elif defined(__arm__)
-    /* ARM Thumb: 0xDF00 (svc 0) or ARM: 0xEF000000 (svc 0) */
-    const uint32_t svc_insn = 0xDF00;
-    const size_t insn_size = 2;
-    const uintptr_t insn_bias = 1;
+    const uint16_t thumb_svc_insn = 0xDF00;
+    const uint32_t arm_svc_insn = 0xEF000000;
   #elif defined(__x86_64__)
     const uint16_t svc_insn = 0x050F; /* syscall */
     const size_t insn_size = 2;
@@ -504,17 +496,43 @@ uintptr_t find_syscall_gadget(int pid, struct maps *remote_map) {
         continue;
       }
 
-      for (size_t j = 0; j + insn_size <= region_size; j += insn_size) {
-        if (memcmp(buf + j, &svc_insn, insn_size) != 0) continue;
+      /* INFO: The binary, in ARM32, might contain either ARM or Thumb instructions
+                 depending of how it was compiled. So, for safety, we included both
+                 as possibilities for the syscall gadget. Thumb instruction set is
+                 different, so take it in consideration too. */
+      #ifdef __arm__
+        for (size_t j = 0; j + sizeof(arm_svc_insn) <= region_size; j += sizeof(uint32_t)) {
+          if (memcmp(buf + j, &arm_svc_insn, sizeof(arm_svc_insn)) != 0) continue;
 
-        uintptr_t addr = m->start + j + insn_bias;
+          LOGD("found ARM syscall gadget in %s at offset 0x%zx", vdso_only ? "vdso" : (m->path ? m->path : "<anon>"), j);
 
-        LOGD("found syscall gadget in %s at offset 0x%zx", vdso_only ? "vdso" : (m->path ? m->path : "<anon>"), j);
+          free(buf);
 
-        free(buf);
+          return m->start + j;
+        }
 
-        return addr;
-      }
+        for (size_t j = 0; j + sizeof(thumb_svc_insn) <= region_size; j += sizeof(uint16_t)) {
+          if (memcmp(buf + j, &thumb_svc_insn, sizeof(thumb_svc_insn)) != 0) continue;
+
+          LOGD("found Thumb syscall gadget in %s at offset 0x%zx", vdso_only ? "vdso" : (m->path ? m->path : "<anon>"), j);
+
+          free(buf);
+
+          return m->start + j + 1;
+        }
+      #else
+        for (size_t j = 0; j + insn_size <= region_size; j += insn_size) {
+          if (memcmp(buf + j, &svc_insn, insn_size) != 0) continue;
+
+          uintptr_t addr = m->start + j + insn_bias;
+
+          LOGD("found syscall gadget in %s at offset 0x%zx", vdso_only ? "vdso" : (m->path ? m->path : "<anon>"), j);
+
+          free(buf);
+
+          return addr;
+        }
+      #endif
 
       free(buf);
     }
@@ -739,10 +757,66 @@ uintptr_t find_arm32_ret_gadget(int pid, struct maps *remote_map) {
   #define AARCH64_PSTATE_BTYPE_MASK (3ull << 10)
 #endif
 
-long remote_syscall(int pid, struct user_regs_struct *regs, uintptr_t syscall_gadget, long sysnr, long *args, size_t args_size) {
-  LOGV("remote syscall %ld args %zu at gadget %p", sysnr, args_size, (void *)syscall_gadget);
+static bool wait_for_ptrace_syscall_stop(int pid, int *status) {
+  int step_retries = 0;
+  while (1) {
+    pid_t waited = waitpid(pid, status, __WALL);
+    if (waited == -1) {
+      if (errno == EINTR) continue;
 
-  long ret = 0;
+      PLOGE("waitpid");
+
+      return false;
+    }
+
+    if (waited != pid) continue;
+
+    if (!WIFSTOPPED(*status)) {
+      char status_str[64];
+      parse_status(*status, status_str, sizeof(status_str));
+      LOGE("Remote syscall stop is not ptrace-stop: %s", status_str);
+
+      return false;
+    }
+
+    int stop_sig = WSTOPSIG(*status);
+    int stop_event = (*status >> 16) & 0xff;
+    bool is_syscall_stop = stop_event == 0 && (stop_sig == SIGTRAP || stop_sig == (SIGTRAP | 0x80));
+
+    if ((stop_sig == SIGSTOP || stop_sig == SIGTRAP) && stop_event == PTRACE_EVENT_STOP) {
+      if (step_retries++ >= 4) {
+        char status_str[64];
+        parse_status(*status, status_str, sizeof(status_str));
+        LOGE("Remote syscall stuck in ptrace-stop: %s", status_str);
+
+        return false;
+      }
+
+      LOGV("Remote syscall got pending ptrace-stop, retrying (retry %d)", step_retries);
+
+      if (ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
+        PLOGE("PTRACE_SYSCALL retry");
+
+        return false;
+      }
+
+      continue;
+    }
+
+    if (is_syscall_stop) return true;
+
+    char status_str[64];
+    parse_status(*status, status_str, sizeof(status_str));
+    LOGE("Remote syscall unexpected stop: %s", status_str);
+
+    return false;
+  }
+}
+
+long remote_syscall(int pid, struct user_regs_struct *regs, uintptr_t syscall_gadget, long sysnr, long *args, size_t args_size) {
+  LOGV("Remote syscall %ld args %zu at gadget %p", sysnr, args_size, (void *)syscall_gadget);
+
+  long ret = -1;
 
   #if defined(__aarch64__)
     struct user_regs_struct saved_regs = *regs;
@@ -816,94 +890,45 @@ long remote_syscall(int pid, struct user_regs_struct *regs, uintptr_t syscall_ga
   #endif
 
   if (!set_regs(pid, regs)) {
-    LOGE("failed to set regs for syscall");
+    LOGE("Failed to set regs for syscall");
 
     return -1;
   }
 
-  /* INFO: Single-step through the syscall instruction */
-  if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0) == -1) {
-    PLOGE("PTRACE_SINGLESTEP");
-
-    ret = -1;
-    goto restore_regs;
-  }
-
-  int status = 0;
-  int step_retries = 0;
-  while (1) {
-    pid_t waited = waitpid(pid, &status, __WALL);
-    if (waited == -1) {
-      if (errno == EINTR) continue;
-      PLOGE("waitpid after PTRACE_SINGLESTEP");
-
-      ret = -1;
-      goto restore_regs;
-    }
-    if (waited != pid) continue;
-
-    if (!WIFSTOPPED(status)) {
-      char status_str[64];
-      parse_status(status, status_str, sizeof(status_str));
-      LOGE("remote syscall stop is not ptrace-stop: %s", status_str);
+  /* INFO: We must perform this code twice. The first time is to step into the syscall entry,
+             and the second time is to step out of the syscall exit. */
+  for (int i = 0; i < 2; i++) {
+    if (ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
+      PLOGE("PTRACE_SYSCALL");
 
       ret = -1;
       goto restore_regs;
     }
 
-    int stop_sig = WSTOPSIG(status);
-    int stop_event = (status >> 16) & 0xff;
+    int status;
+    if (!wait_for_ptrace_syscall_stop(pid, &status)) goto restore_regs;
 
-    if ((stop_sig == SIGSTOP || stop_sig == SIGTRAP) && stop_event == PTRACE_EVENT_STOP) {
-      if (step_retries++ >= 4) {
-        char status_str[64];
-        parse_status(status, status_str, sizeof(status_str));
-        LOGE("remote syscall stuck in ptrace-stop: %s", status_str);
-
-        ret = -1;
-        goto restore_regs;
-      }
-
-      LOGV("remote syscall got pending ptrace-stop, re-single-step (retry %d)", step_retries);
-
-      if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0) == -1) {
-        PLOGE("PTRACE_SINGLESTEP retry");
-
-        ret = -1;
-        goto restore_regs;
-      }
-
-      continue;
-    }
-
-    if (stop_sig == SIGTRAP && stop_event == 0) break;
-
-    char status_str[64];
-    parse_status(status, status_str, sizeof(status_str));
-    LOGE("remote syscall unexpected stop: %s", status_str);
-
-    ret = -1;
-    goto restore_regs;
+    if (i == 0)
+      LOGV("Remote syscall %ld got PTRACE_SYSCALL entry-stop, continuing to exit-stop", sysnr);
   }
 
   if (!get_regs(pid, regs)) {
-    LOGE("failed to get regs after syscall");
+    LOGE("Failed to get regs after PTRACE_SYSCALL");
 
     ret = -1;
     goto restore_regs;
   }
 
-  /* INFO: Extract the return value */
   ret = (long)regs->REG_RET;
+
+  LOGV("Remote syscall %ld succeeded: %ld", sysnr, ret);
 
   restore_regs:
     #ifdef __aarch64__
       *regs = saved_regs;
-      if (!set_regs(pid, regs)) LOGE("failed to restore regs after syscall error");
-
-      return ret;
+      if (!set_regs(pid, regs)) LOGE("Failed to restore regs after syscall error");
     #endif
-  
+
     return ret;
 }
 
@@ -1010,4 +1035,3 @@ int get_program(int pid, char *buf, size_t size) {
 
   return 0;
 }
-

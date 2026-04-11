@@ -3,13 +3,13 @@
 #ifdef __aarch64__
 
 #include <stdlib.h>
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <errno.h>
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "logging.h"

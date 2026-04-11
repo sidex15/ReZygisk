@@ -1,24 +1,20 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <inttypes.h>
 #include <string.h>
-#include <fcntl.h>
-#include <sys/ptrace.h>
-#include <sys/auxv.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
+
 #include <link.h>
-#include <sys/wait.h>
 #include <signal.h>
+#include <sys/mman.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
 
 #include <elf.h>
 #include <unistd.h>
-#include <linux/un.h>
 
 #define LOG_TAG "zygisk-injector" LP_SELECT("32", "64")
 
-#include "utils.h"
 #include "misc.h"
+#include "utils.h"
 
 #include "remote_csoloader.h"
 #include "remote_csoloader_arm32.h"
@@ -117,7 +113,7 @@ static bool inject_tango(int pid, const char *lib_path, uint32_t libc_init_targe
 
   uint32_t tramp_thumb = tramp | 1;
   if (write_proc(pid, (uintptr_t)libc_init_got_slot, &tramp_thumb, 4) != 4 && !ptrace_poke_u32(pid, (uintptr_t)libc_init_got_slot, tramp_thumb)) {
-    LOGE("Failed to patch GOT entry at 0x%x with %d: %s", libc_init_got_slot, errno, strerror(errno));
+    PLOGE("Patch GOT entry at 0x%x", libc_init_got_slot);
 
     goto tango_done;
   }

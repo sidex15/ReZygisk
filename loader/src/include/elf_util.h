@@ -1,11 +1,8 @@
 #ifndef ELF_UTIL_H
 #define ELF_UTIL_H
 
-#include <stdbool.h>
-#include <string.h>
 #include <link.h>
 #include <sys/types.h>
-#include <pthread.h>
 
 #define SHT_GNU_HASH 0x6ffffff6
 

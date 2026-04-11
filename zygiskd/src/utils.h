@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 
+#include <android/log.h>
+
 #include "constants.h"
 #include "root_impl/common.h"
 
@@ -83,7 +85,7 @@ ssize_t write_string(int fd, const char *restrict str);
 
 ssize_t read_string(int fd, char *restrict buf, size_t buf_size);
 
-bool exec_command(char *restrict buf, size_t len, const char *restrict file, char *const argv[]);
+bool exec_command(char *restrict buf, size_t len, const char *restrict file, const char *const argv[]);
 
 bool check_unix_socket(int fd, bool block);
 

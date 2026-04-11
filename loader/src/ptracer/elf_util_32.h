@@ -1,9 +1,6 @@
 #ifndef ELF_UTIL_32_H
 #define ELF_UTIL_32_H
 
-#include <stdbool.h>
-#include <string.h>
-#include <sys/types.h>
 #include <stdint.h>
 
 #ifdef __aarch64__
