@@ -69,7 +69,7 @@ void *entry_thread(void *arg) {
              if the module companion already closed the fd.
   */
   struct stat st1;
-  if (fstat(fd, &st1) != -1 || st0.st_ino == st1.st_ino) {
+  if (fstat(fd, &st1) != -1 && st0.st_ino == st1.st_ino) {
     LOGI(" - Client fd changed after module entry");
 
     close(fd);
@@ -162,15 +162,16 @@ void companion_entry(int fd) {
     }
 
     pthread_t thread;
-    if (pthread_create(&thread, NULL, entry_thread, (void *)args) == 0)
-      continue;
+    if (pthread_create(&thread, NULL, entry_thread, (void *)args) != 0) {
+      LOGE(" - Failed to create thread for companion module");
 
-    LOGE(" - Failed to create thread for companion module");
+      close(client_fd);
+      free(args);
 
-    close(client_fd);
-    free(args);
+      break;
+    }
 
-    break;
+    pthread_detach(thread);
   }
 
   cleanup:

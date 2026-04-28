@@ -1,5 +1,7 @@
 #!/system/bin/sh
 
+set -e
+
 DEBUG=@DEBUG@
 
 MODDIR=${0%/*}
@@ -24,3 +26,5 @@ if [ "$(which magisk)" ]; then
     fi
   done
 fi
+
+exit 0

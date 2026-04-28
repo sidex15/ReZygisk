@@ -30,7 +30,11 @@ struct kernel_version parse_kversion() {
   }
 
   struct kernel_version version;
-  sscanf(uts.release, "%hhu.%u.%u", &version.major, &version.minor, &version.patch);
+  if (sscanf(uts.release, "%hhu.%u.%u", &version.major, &version.minor, &version.patch) != 3) {
+    LOGE("Failed to parse kernel version");
+
+    return (struct kernel_version) { 0 };
+  }
 
   return version;
 }

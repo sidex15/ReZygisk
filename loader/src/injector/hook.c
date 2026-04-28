@@ -88,7 +88,6 @@ static struct zygisk_context *g_ctx = NULL;
 /* INFO: Helper macros for flags */
 #define FLAG_SET(ctx, f) ((ctx)->flags |= (1u << (f)))
 #define FLAG_GET(ctx, f) (((ctx)->flags & (1u << (f))) != 0)
-#define FLAG_CLEAR(ctx, f) ((ctx)->flags &= ~(1u << (f)))
 
 #define DCL_PRE_POST(name)                                   \
   static void rz_## name ##_pre(struct zygisk_context *ctx); \
@@ -424,8 +423,11 @@ void hook_jni_methods(JNIEnv *env, const char *clz, JNINativeMethod *methods, in
 
     jobject method = (*env)->ToReflectedMethod(env, clazz, mid, is_static);
     jint modifier = (*env)->CallIntMethod(env, method, member_getModifiers);
-    if ((modifier & MODIFIER_NATIVE) == 0) {
+    if ((*env)->ExceptionCheck(env) || (modifier & MODIFIER_NATIVE) == 0) {
+      (*env)->ExceptionClear(env);
       nm->fnPtr = NULL;
+
+      (*env)->DeleteLocalRef(env, method);
 
       continue;
     }
@@ -437,7 +439,9 @@ void hook_jni_methods(JNIEnv *env, const char *clz, JNINativeMethod *methods, in
     void *orig = amethod_get_data((uintptr_t)art_method);
     nm->fnPtr = orig;
 
-    LOGV("replaced %s %s orig %p", clz, nm->name, orig);
+    LOGV("replaced %s %s orig %p: %s", clz, nm->name, orig, nm->signature);
+
+    (*env)->DeleteLocalRef(env, method);
   }
 
   if (hooks_count == 0) {
@@ -765,7 +769,9 @@ static void rz_fork_pre(struct zygisk_context *ctx) {
   struct dirent *entry;
   while ((entry = readdir(dir))) {
     int fd = parse_int(entry->d_name);
-    if (fd < 0 || fd >= MAX_FD_SIZE) {
+    if (fd == -1) continue;
+
+    if (fd >= MAX_FD_SIZE) {
       close(fd);
 
       continue;
@@ -802,8 +808,8 @@ static void rz_sanitize_fds(struct zygisk_context *ctx) {
     jintArray fdsToIgnore = ctx->args.app->fds_to_ignore ? *ctx->args.app->fds_to_ignore : NULL;
     mark_fds_allowed(ctx, ctx->env, fdsToIgnore);
 
-    if (fdsToIgnore && ctx->exempted_fds_count > 0) {
-      jint len = (*ctx->env)->GetArrayLength(ctx->env, fdsToIgnore);
+    if (ctx->exempted_fds_count > 0) {
+      jint len = fdsToIgnore ? (*ctx->env)->GetArrayLength(ctx->env, fdsToIgnore) : 0;
       jintArray newArray = (*ctx->env)->NewIntArray(ctx->env, (jsize)(len + ctx->exempted_fds_count));
       if (newArray) {
         if (fdsToIgnore && len > 0) {
@@ -997,12 +1003,19 @@ static void rz_app_specialize_pre(struct zygisk_context *ctx) {
   }
 
   ctx->info_flags = rezygiskd_get_process_flags(uid, ctx->process);
-  if (ctx->info_flags & PROCESS_IS_FIRST_STARTED) {
-    /* INFO: To ensure we are really using a clean mount namespace, we use
-               the first process it as reference for clean mount namespace,
-               before it even does something, so that it will be clean yet
-               with expected mounts.
-    */
+  /* INFO: To ensure we are really using a clean mount namespace, we use
+              the first process it as reference for clean mount namespace,
+              before it even does something, so that it will be clean yet
+              with expected mounts.
+
+           To avoid duplication, we will bypass this update_mnt_ns if we
+             are going to execute it later, as the app will be in the
+             denylist.
+  */
+  if ((ctx->info_flags & PROCESS_IS_FIRST_STARTED) == PROCESS_IS_FIRST_STARTED &&
+      (ctx->info_flags & PROCESS_ON_DENYLIST) == 0 &&
+      (ctx->info_flags & PROCESS_IS_MANAGER) == 0
+  ) {
     update_mnt_ns(Clean, true);
   }
 
@@ -1162,6 +1175,18 @@ static void rz_cleanup(struct zygisk_context *ctx) {
   jni_hook_list = NULL;
   jni_hook_list_count = 0;
   jni_hook_list_capacity = 0;
+
+  for (size_t i = 0; i < ctx->register_info_count; i++) {                                                                                                                        
+    regfree(&ctx->register_info[i].regex);                                                                                                                                       
+    free(ctx->register_info[i].symbol);                                                                                                                                          
+  }                                                                                                                                                                              
+  ctx->register_info_count = 0;                                                                                                                                                  
+                                                                                                                                                                                
+  for (size_t i = 0; i < ctx->ignore_info_count; i++) {                                                                                                                          
+    regfree(&ctx->ignore_info[i].regex);                                                                                                                                         
+    free(ctx->ignore_info[i].symbol);                                                                                                                                            
+  }                                                                                                                                                                              
+  ctx->ignore_info_count = 0; 
 
   /* INFO: Strip out all API function pointers */
   for (size_t i = 0; i < zygisk_module_length; i++) {

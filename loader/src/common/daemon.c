@@ -58,7 +58,7 @@ int rezygiskd_connect(uint8_t retry) {
 
 /* TODO: We should unify all of those */
 #define safe_write(fn, name, ret_type)             \
-  if (!fn) {                                       \
+  if (fn == -1) {                                  \
     LOGE("Failed to write " name " to ReZygiskd"); \
                                                    \
     close(fd);                                     \
@@ -66,13 +66,13 @@ int rezygiskd_connect(uint8_t retry) {
     ret_type;                                      \
   }
 
-#define safe_read(fn, name, ret_type)              \
-  if (!fn) {                                       \
+#define safe_read(fn, name, ret_type)               \
+  if (fn == -1) {                                   \
     LOGE("Failed to read " name " from ReZygiskd"); \
-                                                   \
-    close(fd);                                     \
-                                                   \
-    ret_type;                                      \
+                                                    \
+    close(fd);                                      \
+                                                    \
+    ret_type;                                       \
   }
 
 bool rezygiskd_zygote_injected() {
@@ -127,7 +127,7 @@ void rezygiskd_get_info(struct rezygisk_info *info) {
   uint32_t flags = 0;
   safe_read(read_uint32_t(fd, &flags), "info flags", return);
 
-  if (flags & (1 << 27)) info->root_impl = ROOT_IMPL_APATCH;
+  if (flags & (1 << 28)) info->root_impl = ROOT_IMPL_APATCH;
   else if (flags & (1 << 29)) info->root_impl = ROOT_IMPL_KERNELSU;
   else if (flags & (1 << 30)) info->root_impl = ROOT_IMPL_MAGISK;
   else info->root_impl = ROOT_IMPL_NONE;
@@ -180,7 +180,23 @@ void rezygiskd_get_info(struct rezygisk_info *info) {
     while (fgets(line, sizeof(line), module_prop) != NULL) {
       if (strncmp(line, "name=", strlen("name=")) != 0) continue;
 
-      info->modules.modules[i] = strndup(line + 5, strlen(line) - 6);
+      size_t name_len = strlen(line + strlen("name="));
+      if (name_len == 0 || line[name_len + strlen("name=") - 1] != '\n') {
+        LOGE("Invalid module name in %s", module_path);
+
+        fclose(module_prop);
+
+        goto info_cleanup;
+      }
+
+      info->modules.modules[i] = strndup(line + strlen("name="), name_len - 1);
+      if (info->modules.modules[i] == NULL) {
+        PLOGE("allocate memory for module name from %s", module_path);
+
+        fclose(module_prop);
+
+        goto info_cleanup;
+      }
 
       break;
     }
@@ -214,6 +230,7 @@ void free_rezygisk_info(struct rezygisk_info *info) {
 
   free(info->modules.modules);
   info->modules.modules = NULL;
+  info->modules.modules_count = 0;
 }
 
 bool rezygiskd_read_modules(struct zygisk_modules *modules) {
@@ -244,6 +261,9 @@ bool rezygiskd_read_modules(struct zygisk_modules *modules) {
     if (!lib_path) {
       PLOGE("reading module lib_path");
 
+      modules->modules_count = i;
+      free_modules(modules);
+
       close(fd);
 
       return false;
@@ -263,6 +283,8 @@ void free_modules(struct zygisk_modules *modules) {
   }
 
   free(modules->modules);
+  modules->modules = NULL;
+  modules->modules_count = 0;
 }
 
 int rezygiskd_connect_companion(size_t index) {

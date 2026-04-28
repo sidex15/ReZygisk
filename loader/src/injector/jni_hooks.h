@@ -405,19 +405,7 @@ __attribute__((no_stack_protector)) static jint nativeForkSystemServer_samsung_q
   rz_cleanup(&ctx);
   return ctx.pid;
 }
-__attribute__((no_stack_protector)) static jint nativeForkSystemServer_grapheneos_u(JNIEnv *env, jclass clazz, jint uid, jint gid, jintArray gids, jint runtime_flags, jobjectArray rlimits, jlong permitted_capabilities, jlong effective_capabilities) {
-  struct server_specialize_args_v1 args = { .uid = &uid, .gid = &gid, .gids = &gids, .runtime_flags = &runtime_flags, .permitted_capabilities = &permitted_capabilities, .effective_capabilities = &effective_capabilities };
-  struct zygisk_context ctx;
-  rz_init(&ctx, env, &args);
-  rz_nativeForkSystemServer_pre(&ctx);
-  ((nativeForkSystemServer_fn)nativeForkSystemServer_orig)(
-    env, clazz, uid, gid, gids, runtime_flags, rlimits, permitted_capabilities, effective_capabilities
-  );
-  rz_nativeForkSystemServer_post(&ctx);
-  rz_cleanup(&ctx);
-  return ctx.pid;
-}
-static JNINativeMethod nativeForkSystemServer_methods[3] = {
+static JNINativeMethod nativeForkSystemServer_methods[2] = {
   {
     "nativeForkSystemServer",
     "(II[II[[IJJ)I",
@@ -428,13 +416,8 @@ static JNINativeMethod nativeForkSystemServer_methods[3] = {
     "(II[IIII[[IJJ)I",
     (void *) &nativeForkSystemServer_samsung_q
   },
-  {
-    "nativeForkSystemServer",
-    "(II[II[[IJJ)I",
-    (void *) &nativeForkSystemServer_grapheneos_u
-  },
 };
-static const int nativeForkSystemServer_methods_count = 3;
+static const int nativeForkSystemServer_methods_count = 2;
 
 static void do_hook_zygote(JNIEnv *env) {
   JNINativeMethod hooks[3];

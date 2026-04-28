@@ -87,6 +87,20 @@ static void load_modules(struct Context *restrict context) {
     if (tmp_modules == NULL) {
       LOGE("Failed reallocating memory for modules.");
 
+      close(lib_fd);
+
+      for (size_t i = 0; i < context->len; i++) {
+        free(context->modules[i].name);
+        if (context->modules[i].companion >= 0) close(context->modules[i].companion);
+        if (context->modules[i].lib_fd >= 0) close(context->modules[i].lib_fd);
+      }
+
+      free(context->modules);
+      context->modules = NULL;
+      context->len = 0;
+
+      closedir(dir);
+
       return;
     }
     context->modules = tmp_modules;
@@ -94,6 +108,8 @@ static void load_modules(struct Context *restrict context) {
     context->modules[context->len].name = strdup(name);
     if (context->modules[context->len].name == NULL) {
       LOGE("Failed to strdup for the module \"%s\": %s", name, strerror(errno));
+
+      close(lib_fd);
 
       return;
     }
@@ -110,6 +126,7 @@ static void free_modules(struct Context *restrict context) {
   for (size_t i = 0; i < context->len; i++) {
     free(context->modules[i].name);
     if (context->modules[i].companion >= 0) close(context->modules[i].companion);
+    if (context->modules[i].lib_fd >= 0) close(context->modules[i].lib_fd);
   }
 
   free(context->modules);
@@ -139,9 +156,9 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
     close(companion_fd);
     close(daemon_fd);
 
-    exit(1);
+    return -1;
   }
-
+  
   if (pid > 0) {
     close(companion_fd);
 
@@ -184,15 +201,23 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
 
     switch (response) {
       /* INFO: Even without any entry, we should still just deal with it */
-      case 0: { return -2; }
+      case 0: {
+        close(daemon_fd);
+
+        return -2;
+      }
       case 1: { return daemon_fd; }
       /* TODO: Should we be closing daemon socket here? (in non-0-and-1 case) */
       default: {
+        close(daemon_fd);
+
         return -1;
       }
     }
   /* INFO: if pid == 0: */
   }
+
+  close(daemon_fd);
 
   /* INFO: There is no case where this will fail with a valid fd. */
   /* INFO: Remove FD_CLOEXEC flag to avoid closing upon exec */
@@ -200,7 +225,6 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
     LOGE("Failed removing FD_CLOEXEC flag: %s", strerror(errno));
 
     close(companion_fd);
-    close(daemon_fd);
 
     exit(1);
   }
@@ -221,7 +245,6 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
   snprintf(companion_fd_str, sizeof(companion_fd_str), "%d", companion_fd);
 
   char companion[] = "companion";
-
   char *eargv[] = { process_name, companion, companion_fd_str, NULL };
   if (non_blocking_execv(ZYGISKD_PATH, eargv) == -1) {
     LOGE("Failed executing companion: %s", strerror(errno));
@@ -309,9 +332,13 @@ void zygiskd_start(char *restrict argv[]) {
     if (len == -1) {
       LOGE("read: %s", strerror(errno));
 
+      close(client_fd);
+
       break;
     } else if (len == 0) {
       LOGI("Client disconnected");
+
+      close(client_fd);
 
       break;
     }
@@ -353,16 +380,16 @@ void zygiskd_start(char *restrict argv[]) {
           flags |= PROCESS_IS_FIRST_STARTED;
 
           first_process = false;
+        }
+
+        if (uid_is_manager(uid)) {
+          flags |= PROCESS_IS_MANAGER;
         } else {
-          if (uid_is_manager(uid)) {
-            flags |= PROCESS_IS_MANAGER;
-          } else {
-            if (uid_granted_root(uid)) {
-              flags |= PROCESS_GRANTED_ROOT;
-            }
-            if (uid_should_umount(uid, (const char *const)process)) {
-              flags |= PROCESS_ON_DENYLIST;
-            }
+          if (uid_granted_root(uid)) {
+            flags |= PROCESS_GRANTED_ROOT;
+          }
+          if (uid_should_umount(uid, (const char *const)process)) {
+            flags |= PROCESS_ON_DENYLIST;
           }
         }
 
@@ -466,8 +493,6 @@ void zygiskd_start(char *restrict argv[]) {
           ret = write_uint8_t(client_fd, 0);
           ASSURE_SIZE_WRITE("RequestCompanionSocket", "response", ret, sizeof(uint8_t), break);
 
-          close(client_fd);
-
           break;
         }
 
@@ -510,18 +535,12 @@ void zygiskd_start(char *restrict argv[]) {
 
             close(module->companion);
             module->companion = -1;
-
-            /* INFO: RequestCompanionSocket by default doesn't close the client_fd */
-            close(client_fd);
           }
         } else {
           LOGE(" - Failed to spawn companion for module \"%s\"", module->name);
 
           ret = write_uint8_t(client_fd, 0);
           ASSURE_SIZE_WRITE("RequestCompanionSocket", "response", ret, sizeof(uint8_t), break);
-
-          /* INFO: RequestCompanionSocket by default doesn't close the client_fd */
-          close(client_fd);
         }
 
         break;
@@ -536,8 +555,6 @@ void zygiskd_start(char *restrict argv[]) {
 
           ret = write_uint8_t(client_fd, 0);
           ASSURE_SIZE_WRITE("GetModuleDir", "response", ret, sizeof(uint8_t), break);
-
-          close(client_fd);
 
           break;
         }
@@ -604,8 +621,6 @@ void zygiskd_start(char *restrict argv[]) {
           ret = write_uint8_t(client_fd, 0);
           ASSURE_SIZE_WRITE("RemoveModule", "response", ret, sizeof(uint8_t), break);
 
-          close(client_fd);
-
           break;
         }
 
@@ -633,9 +648,7 @@ void zygiskd_start(char *restrict argv[]) {
       }
     }
 
-    if (action != RequestCompanionSocket) close(client_fd);
-
-    continue;
+    close(client_fd);
   }
 
   close(socket_fd);

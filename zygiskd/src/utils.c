@@ -94,23 +94,37 @@ void set_socket_create_context(const char *restrict context) {
     fclose(sockcreate);
 }
 
-static void get_current_attr(char *restrict output, size_t size) {
+static bool get_current_attr(char *restrict output, size_t size) {
   FILE *current = fopen("/proc/self/attr/current", "r");
   if (current == NULL) {
     LOGE("fopen: %s", strerror(errno));
 
-    return;
+    return false;
   }
 
-  if (fread(output, 1, size, current) == 0)
+  size_t ret = fread(output, 1, size, current);
+  if (ferror(current)) {
     LOGE("fread: %s", strerror(errno));
 
+    fclose(current);
+
+    return false;
+  }
+
+  output[ret] = '\0';
+
   fclose(current);
+
+  return true;
 }
 
 void unix_datagram_sendto(const char *restrict path, const void *restrict buf, size_t len) {
   char current_attr[PATH_MAX];
-  get_current_attr(current_attr, sizeof(current_attr));
+  if (!get_current_attr(current_attr, sizeof(current_attr))) {
+    LOGE("Failed to get current attribute");
+
+    return;
+  }
 
   set_socket_create_context(current_attr);
 
@@ -123,6 +137,8 @@ void unix_datagram_sendto(const char *restrict path, const void *restrict buf, s
   if (socket_fd == -1) {
     LOGE("socket: %s", strerror(errno));
 
+    set_socket_create_context("u:r:zygote:s0");
+
     return;
   }
 
@@ -131,6 +147,8 @@ void unix_datagram_sendto(const char *restrict path, const void *restrict buf, s
 
     close(socket_fd);
 
+    set_socket_create_context("u:r:zygote:s0");
+
     return;
   }
 
@@ -138,6 +156,8 @@ void unix_datagram_sendto(const char *restrict path, const void *restrict buf, s
     LOGE("sendto: %s", strerror(errno));
 
     close(socket_fd);
+
+    set_socket_create_context("u:r:zygote:s0");
 
     return;
   }
@@ -198,7 +218,7 @@ ssize_t write_fd(int fd, int sendfd) {
 
   struct iovec iov = {
     .iov_base = buf,
-    .iov_len = 1
+    .iov_len = sizeof(buf)
   };
 
   struct msghdr msg = {
@@ -248,15 +268,22 @@ int read_fd(int fd) {
     return -1;
   }
 
-  struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-  if (cmsg == NULL) {
-    LOGE("CMSG_FIRSTHDR: %s", strerror(errno));
+  struct cmsghdr *cmsg;
+  int sendfd = -1;
+
+  for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS || cmsg->cmsg_len < CMSG_LEN(sizeof(int))) continue;
+
+    memcpy(&sendfd, CMSG_DATA(cmsg), sizeof(int));
+
+    break;
+  }
+
+  if (sendfd == -1) {
+    LOGE("Failed to receive fd: No valid fd found in ancillary data.");
 
     return -1;
   }
-
-  int sendfd;
-  memcpy(&sendfd, CMSG_DATA(cmsg), sizeof(int));
 
   return sendfd;
 }
@@ -382,7 +409,11 @@ bool check_unix_socket(int fd, bool block) {
   };
 
   int timeout = block ? -1 : 0;
-  poll(&pfd, 1, timeout);
+  if (poll(&pfd, 1, timeout) == -1) {
+    LOGE("poll: %s", strerror(errno));
+
+    return false;
+  }
 
   return pfd.revents & ~POLLIN ? false : true;
 }
@@ -410,6 +441,8 @@ int non_blocking_execv(const char *restrict file, char *const argv[]) {
     close(link[1]);
 
     execv(file, argv);
+
+    _exit(1);
   } else {
     close(link[1]);
 
@@ -523,20 +556,20 @@ bool parse_mountinfo(const char *restrict pid, struct mountinfos *restrict mount
     int optional_start = 0, optional_end = 0;
     unsigned int id, parent, maj, min;
     sscanf(line,
-            "%u "           // (1) id
-            "%u "           // (2) parent
-            "%u:%u "        // (3) maj:min
-            "%n%*s%n "      // (4) mountroot
-            "%n%*s%n "      // (5) target
-            "%n%*s%n"       // (6) vfs options (fs-independent)
-            "%n%*[^-]%n - " // (7) optional fields
-            "%n%*s%n "      // (8) FS type
-            "%n%*s%n "      // (9) source
-            "%n%*s%n",      // (10) fs options (fs specific)
-            &id, &parent, &maj, &min, &root_start, &root_end, &target_start,
-            &target_end, &vfs_option_start, &vfs_option_end,
-            &optional_start, &optional_end, &type_start, &type_end,
-            &source_start, &source_end, &fs_option_start, &fs_option_end);
+      "%u "           /* INFO: id */        
+      "%u "           /* INFO: parent id */
+      "%u:%u "        /* INFO: maj:min */
+      "%n%*s%n "      /* INFO: mountroot */
+      "%n%*s%n "      /* INFO:target */
+      "%n%*s%n"       /* INFO: vfs options (fs-independent) */
+      "%n%*[^-]%n - " /* INFO: optional fields */
+      "%n%*s%n "      /* INFO: FS type */
+      "%n%*s%n "      /* INFO: source */
+      "%n%*s%n",      /* INFO: fs options (fs specific) */
+      &id, &parent, &maj, &min, &root_start, &root_end, &target_start,
+      &target_end, &vfs_option_start, &vfs_option_end,
+      &optional_start, &optional_end, &type_start, &type_end,
+      &source_start, &source_end, &fs_option_start, &fs_option_end);
 
     struct mountinfo *tmp_mounts = (struct mountinfo *)realloc(mounts->mounts, (i + 1) * sizeof(struct mountinfo));
     if (!tmp_mounts) {
@@ -698,11 +731,11 @@ bool umount_root(struct root_impl impl) {
 }
 
 int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl impl) {
-  static int clean_namespace_fd = 0;
-  static int mounted_namespace_fd = 0;
+  static int clean_namespace_fd = -1;
+  static int mounted_namespace_fd = -1;
 
-  if (mns_state == Clean && clean_namespace_fd != 0) return clean_namespace_fd;
-  if (mns_state == Mounted && mounted_namespace_fd != 0) return mounted_namespace_fd;
+  if (mns_state == Clean && clean_namespace_fd != -1) return clean_namespace_fd;
+  if (mns_state == Mounted && mounted_namespace_fd != -1) return mounted_namespace_fd;
 
   int sockets[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {

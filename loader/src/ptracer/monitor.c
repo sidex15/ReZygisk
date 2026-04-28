@@ -20,7 +20,7 @@
 
 #define SOCKET_NAME "init_monitor"
 
-#define STOPPED_WITH(sig, event) WIFSTOPPED(sigchld_status) && (sigchld_status >> 8 == ((sig) | (event << 8)))
+#define STOPPED_WITH(sig, event) (WIFSTOPPED(sigchld_status) && (sigchld_status >> 8 == ((sig) | ((event) << 8))))
 
 static bool update_status(const char *message);
 
@@ -127,6 +127,14 @@ void monitor_events_loop() {
     }
 
     for (int i = 0; i < nfds; i++) {
+      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+        LOGE("Failed event on fd %d: %s", ((struct epoll_event *)&events[i])->data.fd, strerror(errno));
+
+        monitor_events_running = false;
+
+        break;
+      }
+
       ((monitor_event_callback_t)events[i].data.ptr)();
 
       if (!monitor_events_running) break;
@@ -169,6 +177,8 @@ void rezygiskd_listener_callback() {
     uint8_t cmd;
     ssize_t nread = TEMP_FAILURE_RETRY(read(monitor_sock_fd, &cmd, sizeof(cmd)));
     if (nread == -1) {
+      if (errno == EINTR || errno == EWOULDBLOCK) break;
+
       PLOGE("read socket");
 
       continue;
@@ -382,8 +392,6 @@ void rezygiskd_listener_callback() {
         break;
       }
     }
-
-    break;
   }
 }
 
@@ -502,7 +510,7 @@ static bool ensure_daemon_created(bool is_64bit) {
 
 #define PRE_INJECT_TANGO                                           \
   if (strcmp(program, "/system_ext/bin/tango_translator") == 0) {  \
-    tracer = "./bin/zygisk-ptrace64";                              \
+    tracer = "./bin/zygisk-ptrace32";                              \
     is_tango = true;                                               \
                                                                    \
     if (should_stop_inject32()) {                                  \
@@ -665,12 +673,13 @@ void sigchld_listener_callback() {
           goto ptrace_process;
         }
 
-        sigchld_process = (pid_t *)realloc(sigchld_process, sizeof(pid_t) * (sigchld_process_count + 1));
-        if (sigchld_process == NULL) {
+        pid_t *new_sigchld_process = (pid_t *)realloc(sigchld_process, sizeof(pid_t) * (sigchld_process_count + 1));
+        if (new_sigchld_process == NULL) {
           PLOGE("realloc sigchld_process");
 
           continue;
         }
+        sigchld_process = new_sigchld_process;
 
         sigchld_process[sigchld_process_count] = pid;
         sigchld_process_count++;

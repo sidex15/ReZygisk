@@ -20,7 +20,7 @@ void apatch_get_existence(struct root_impl_state *state) {
 
   const char *PATH = getenv("PATH");
   if (PATH == NULL) {
-    LOGE("Failed to get PATH environment variable: %s", strerror(errno));
+    LOGE("Failed to get PATH environment variable");
 
     state->state = Inexistent;
 

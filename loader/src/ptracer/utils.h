@@ -84,26 +84,23 @@ long remote_syscall(int pid, struct user_regs_struct *regs, uintptr_t syscall_ga
 
 uintptr_t find_syscall_gadget(int pid, struct maps *remote_map);
 
-/* INFO: Only used for Tango */
-#ifdef __aarch64__
-  struct tango_linker_watch {
-    uint32_t libc_init_got_slot;
-    uint32_t libc_init_initial;
-    uint32_t libc_init_resolved;
-  };
+/* INFO: Tango-specific linker watch state */
+struct tango_linker_watch {
+  uint32_t libc_init_got_slot;
+  uint32_t libc_init_initial;
+  uint32_t libc_init_resolved;
+};
 
-  bool ptrace_poke_u32(pid_t pid, uintptr_t addr, uint32_t value);
+bool ptrace_poke_u32(pid_t pid, uintptr_t addr, uint32_t value);
 
-  uintptr_t find_arm32_ret_gadget(int pid, struct maps *remote_map);
+uintptr_t find_arm32_ret_gadget(int pid, struct maps *remote_map);
 
-  bool tango_step_to_syscall(int pid);
+bool wait_for_ptrace_syscall_stop(int pid, int *status);
+bool wait_for_event_stop(int pid);
 
-  bool tango_drain_to_event_stop(int pid);
+bool tango_wait_linker_ready(int pid, struct tango_linker_watch *watch);
 
-  bool tango_wait_linker_ready(int pid, struct tango_linker_watch *watch);
-
-  uint32_t find_tramp_padding(int pid, uint32_t rx_start, uint32_t rx_end, size_t needed);
-#endif
+uint32_t find_tramp_padding(int pid, uint32_t rx_start, uint32_t rx_end, size_t needed);
 
 int fork_dont_care();
 
