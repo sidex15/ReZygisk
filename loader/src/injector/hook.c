@@ -1296,6 +1296,8 @@ static bool hook_unregister(const char *lib_name, const char *symbol, bool is_pr
   if (!(is_prefix ? plti_remove_hook_by_prefix : plti_remove_hook)(&plti_ctx, lib_name, symbol, backup)) {
     LOGE("Failed to unregister plt_hook \"%s\" with PLTI", symbol);
 
+    should_unmap_zygisk = false;
+
     return false;
   }
 

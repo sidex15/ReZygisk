@@ -50,7 +50,8 @@ typedef struct {
   ElfW(Sym) *symtab_start;
   ElfW(Off) symstr_offset_for_symtab;
 
-  struct symtabs *symtabs_;
+  ElfW(Sym) **symtabs_;
+  size_t symtabs_count_;
 } ElfImg;
 
 void ElfImg_destroy(ElfImg *img);
