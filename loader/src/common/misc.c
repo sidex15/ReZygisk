@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
+#include <inttypes.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -142,6 +142,8 @@ struct maps_info *parse_maps_safe(const char *pid) {
   struct maps_info *info_array = calloc(1, sizeof(struct maps_info));
   if (!info_array) {
     PLOGE("allocate memory");
+
+    fclose(fp);
 
     close(fd);
     close(sockets[0]);
